@@ -29,7 +29,7 @@ if __name__ == "__main__":
     totalCorrect = 0
     totalIncorrect = 0
     for i in range(len(dataset.observations)):
-        print(f"obs{i}")
+        # print(f"obs{i}")
         predictedStates = hmm.viterbi(dataset.observations[i])
         if len(predictedStates) != len(dataset.states[i]):
             print("Length of predictedStates differs from dataset.states")

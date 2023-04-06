@@ -89,7 +89,7 @@ class HMM(object):
         emission_probs : numpy.ndarray, optional
             An M x N array encoding the emission probabilities, where
             emission_probs[k,i] is the probability of observing k from state i.
-        prior_pi : numpy.ndarray, optional
+        pi : numpy.ndarray, optional
             An N x 1 array encoding the prior probabilities
         """
         # assert len(envShape) == 2
@@ -118,103 +118,78 @@ class HMM(object):
             self.start_probs = start_probs
         print(self.emission_probs)
         print(self.emission_probs.shape)
+        
+        
         # assert self.num_states == self.emission_probs.shape[1]
         self.state_map = self._generate_state_map(self.states)
 
         return None
 
-    def setParams(self, transition_probs, emission_probs, prior_pi) -> None:
+    def setParams(self, transition_probs, emission_probs, pi) -> None:
         """Set the transition, emission, and prior probabilities."""
         self.transition_probs = transition_probs
         self.emission_probs = emission_probs
-        self.prior_pi = prior_pi
+        self.start_probs = pi
         return None
 
     def getParams(self):
         """Get the transition, emission, and prior probabilities."""
-        return (self.transition_probs, self.emission_probs, self.prior_pi)
+        return (self.transition_probs, self.emission_probs, self.start_probs)
 
-    def train(self, observations, train_iterations=10000):
-        """
-        Estimate HMM parameters from training data via Baum-Welch.
+     # Estimate the transition and observation likelihoods and the
+    # prior over the initial state based upon training data
+    def train(self, observations, num_iter = 1000):
+        """Estimate HMM parameters from training data via Baum-Welch.
 
         Parameters
         ----------
         observations : list
             A list specifying a set of observation sequences
             where observations[i] denotes a distinct sequence
-
-        train_iterations : int
-            Number of iterations to run the Baum-Welch algorithm
         """
-        print("base")
-        print(f"start probs: {DF(self.start_probs)}")
-        print(f"emissions: {DF(self.emission_probs)}")
-        # plot_heatmap(
-        #     self.transition_probs,
-        #     "transition_probs",
-        #     "transition_probs",
-        #     "transition_probs",
-        #     True,
-        # )
-        # plot_heatmap(
-        #     self.emission_np, sum(probs,
-        #     "emission_probs",
-        #     "emission_probs",
-        #     "emission_probs",
-        #     True,
-        # )
-        print()
-
+        # Changing our observations to the encoding
+        observations = [[self.obs2ind(ob) for ob in obs] for obs in observations]
+        # This function should set self.transition_probs, self.emission_probs, and self.start_probs
+        
         last_prob = float("inf")
-
-        # Train the model 'iteration' number of times
-        # store emission_probs and transition_probs copies since you should use same values for one loop
-        for iter in range(train_iterations):
-            new_emission_probs = np.asmatrix(np.zeros((self.emission_probs.shape)))
-            new_transition_prob = np.asmatrix(np.zeros((self.transition_probs.shape)))
-            new_start_probs = np.asmatrix(np.zeros((self.start_probs.shape)))
-
-            for observation in observations:
-                new_start_probs += self._train_start_probs(observation).T
-                new_emission_probs += self._train_emission(observation)
-                new_transition_prob += self._train_transition(observation)
-
-            # Normalizing
-            new_start_probs = new_start_probs / np.sum(new_start_probs, axis=1)
-            new_transition_prob = new_transition_prob / np.sum(
-                new_transition_prob, axis=1
-            )
-            new_emission_probs = new_emission_probs / np.sum(new_emission_probs, axis=1)
-
-            self.start_probs, self.emission_probs, self.transition_probs = (
-                new_start_probs,
-                new_emission_probs,
-                new_transition_prob,
-            )
-
-            print(f"iter: {iter}")
-            print(f"start probs: {DF(self.start_probs)}")
-            print(f"transitions: {DF(self.transition_probs)}")
-            print(f"emissions: {DF(self.emission_probs)}")
-            # plot_heatmap(
-            #     self.transition_probs,
-            #     "transition_probs",
-            #     "transition_probs",
-            #     "transition_probs",
-            #     True,
-            # )
-            # plot_heatmap(
-            #     self.emission_probs,
-            #     "emission_probs",
-            #     "emission_probs",
-            #     "emission_probs",
-            #     True,
-            # )
-            print()
-
+        
+        for iter in range(num_iter):
+            # Initializing our new params
+            new_trans_probs = np.zeros(self.transition_probs.shape)
+            normaling_const = np.zeros(self.transition_probs.shape[0])
+            
+            new_emission_probs = np.zeros(self.emission_probs.shape)
+            
+            new_start_prob = np.zeros(self.num_states)
+            
+            for r,obs in enumerate(observations):
+                alpha, C_t = self.forward(obs)
+                beta = self.backward(obs, C_t)
+                
+                gamma = self.computeGamma(alpha,beta)
+                Xis = self.computeXis(alpha,beta,obs)
+                
+                
+                new_start_prob += gamma[0]
+                
+                new_trans_probs += Xis.sum(axis=0)
+                
+                one_hot_encoder = self._one_hot_encoder(obs,self.emission_probs.shape[0])
+                
+                new_emission_probs += one_hot_encoder.T @ gamma 
+                
+                normaling_const += gamma.sum(axis=0)
+                
+            self.start_probs =  new_start_prob / len(observations)
+            
+            self.transition_probs = new_trans_probs / normaling_const.reshape(-1,1)
+            self.transition_probs = np.nan_to_num(self.transition_probs)
+            
+            self.emission_probs = new_emission_probs / normaling_const 
+            self.emission_probs = np.nan_to_num(self.emission_probs)
+        
             c_scales = [
-                np.sum(np.log(self._compute_alpha(obs)[1])) for obs in observations
+                np.sum(np.log(self.forward(obs)[1])) for obs in observations
             ]
             curr_prob = 0
             for c_scale in c_scales:
@@ -223,11 +198,88 @@ class HMM(object):
                 last_prob = curr_prob
             else:
                 break
+        print(f'transition_probs: {DF(self.transition_probs)}')
+        print(f'emission_probs: {DF(self.emission_probs)}')
+        print(f'start_probs: {DF(self.start_probs)}')
 
-        # print(self.start_probs)
-        # print("hi3")
-        # print(self.emission_probs)
-        return self.emission_probs, self.transition_probs, self.start_probs
+
+        plot_heatmap(self.transition_probs,'s','','',)
+        return None
+        
+
+
+    def forward(self, obs):
+        """Implement one forward step.
+        
+        Returns
+        -------
+        alpha : numpy.ndarray
+            T x N array denoting the alpha at each time-step
+        
+        C_T : numpy.ndarray
+            T x 1 array denoting the normalization constant
+        """
+        time = len(obs)
+        alpha = np.zeros((time, self.num_states),)
+        C_t = np.zeros(time)
+        
+        alpha[0] = self.emission_probs[obs[0]]*self.start_probs.T
+        C_t[0] = sum(alpha[0])
+        alpha[0] = alpha[0] / C_t[0]
+        
+        for t in range(1,time):
+
+            alpha[t] = self.emission_probs[obs[t]] * (self.transition_probs.T @ alpha[t-1])
+            C_t[t] = sum(alpha[t])
+            alpha[t] = alpha[t] / C_t[t]
+        
+        return alpha, C_t
+        
+    def backward(self, obs, C_t):
+        """Implement backward step.
+        
+        Returns
+        -------
+        beta : numpy.ndarray
+            (T+1) x N array denoting the beta at each time-step for state j
+        """
+        time = len(obs)
+    
+        beta = np.zeros((time, self.num_states),)
+        
+        beta[time-1] = 1
+        for t in range(time-2,-1,-1):
+            beta[t] = (self.transition_probs @ (beta[t+1] * self.emission_probs[obs[t+1]])) / C_t[t]
+        
+        return beta
+        
+
+    def computeGamma(self, alpha, beta, norm = None):
+        """Compute P(X[t] | Z^T).
+        
+        Returns
+        -------
+        gamma : numpy.ndarray
+            T x N array denoting the gamma at each time-step for state j
+        """
+        alphbeta = alpha * beta
+        denom = alphbeta.sum(axis=1)
+        gamma = alphbeta/ np.vstack(denom)
+        return gamma
+
+    def computeXis(self, alpha, beta, obs):
+        """Compute xi as an array comprised of each xi-xj pair.
+        
+        Returns
+        -------
+        Xis : numpy.ndarray
+            (T-1) x N x N array denoting the Xis at each time-step for each transition (i,j)
+        """
+        
+        Xis = np.einsum("ti,tj,ji,tj -> tij", alpha[:-1], beta[1:], self.transition_probs, self.emission_probs[obs][1:])
+        Xis = Xis / Xis.sum(axis=(1,2)).reshape(Xis.shape[0],1,1)
+        
+        return Xis
 
     def viterbi(self, observations):
         """
@@ -244,9 +296,9 @@ class HMM(object):
         states : list
             List of predicted sequence of states, each specified as (x, y) pair
         """
-        print("viterbi")
-        print(f"start probs: {self.start_probs}")
-        print(f"emission probs: {self.emission_probs}")
+        # print("viterbi")
+        # print(f"start probs: {self.start_probs}")
+        # print(f"emission probs: {self.emission_probs}")
         obs_map = self._generate_obs_map(observations)
 
         # Find total states,observations
@@ -264,11 +316,8 @@ class HMM(object):
         ob_ind = obs_map[0]
         self.emission_probs[ob_ind, :]
         delta = had_prod(np.transpose(self.emission_probs[ob_ind, :]), self.start_probs)
-        print(delta)
-        delta /= np.nansum(delta)
-        delta = np.nan_to_num(delta)
+        delta = np.nan_to_num(delta / np.nansum(delta))
 
-        print(delta)
 
         # initialize path
         old_path[0, :] = [i for i in range(num_states)]
@@ -284,13 +333,11 @@ class HMM(object):
             temp = had_prod(temp, self.emission_probs[ob_ind, :])
 
             # Update delta and scale it
-            delta = temp.max(axis=1).T / np.sum(delta)
-            np.nan_to_num(delta)
+            delta = np.nan_to_num(temp.max(axis=1).T / np.sum(delta))
 
             # Find state which is most probable using argax
             # Convert to a list for easier processing
-            max_temp = np.ravel(temp.argmax(axis=1).T).tolist()
-            np.nan_to_num(max_temp)
+            max_temp = np.nan_to_num(np.ravel(temp.argmax(axis=1).T).tolist())
 
             # Update path
             for s in range(num_states):
@@ -304,14 +351,14 @@ class HMM(object):
         best_path = old_path[:, final_max].tolist()
         best_path_map = [self.state_map[i] for i in best_path]
 
-        print(self.state_map)
+        # print(self.state_map)
 
         best_tups = [self.ind2sub(i) for i in best_path_map]
         return best_tups
 
     def getLogStartProb(self, state):
         """Return the log probability of a particular state."""
-        return np.log(self.prior_pi[state])
+        return np.log(self.start_probs[state])
 
     def getLogTransProb(self, fromState, toState):
         """Return the log probability associated with a state transition."""
@@ -343,79 +390,79 @@ class HMM(object):
     def _generate_obs_map(self, observations):
         return [self.obs2ind(obs) for obs in observations]
 
-    def _compute_alpha(self, observations):
-        # Calculate alpha matrix and return it
+    # def _compute_alpha(self, observations):
+    #     # Calculate alpha matrix and return it
 
-        obs_map = self._generate_obs_map(observations)
-        num_observations = len(observations)
+    #     obs_map = self._generate_obs_map(observations)
+    #     num_observations = len(observations)
 
-        # Initialize values
-        alpha = np.asmatrix(np.zeros((self.num_states, num_observations)))
-        c_scale = np.asmatrix(np.zeros((num_observations, 1)))
+    #     # Initialize values
+    #     alpha = np.asmatrix(np.zeros((self.num_states, num_observations)))
+    #     c_scale = np.asmatrix(np.zeros((num_observations, 1)))
 
-        # Handle alpha base case
-        # alpha[:, 0] = had_prod(self.start_probs, (self.emission_probs[ob_ind, :])).T
-        alpha[:, 0] = had_prod(
-            self.start_probs.T, (self.emission_probs[obs_map[0], :])
-        ).T
+    #     # Handle alpha base case
+    #     # alpha[:, 0] = had_prod(self.start_probs, (self.emission_probs[ob_ind, :])).T
+    #     alpha[:, 0] = had_prod(
+    #         self.start_probs.T, (self.emission_probs[obs_map[0], :])
+    #     ).T
 
-        # store scaling factors, scale alpha
-        c_scale[0, 0] = 1 / np.sum(alpha[:, 0])
-        alpha[:, 0] = alpha[:, 0] * c_scale[0]
-        # Iteratively calculate alpha(t) for all 't'
-        for curr_t in range(1, num_observations):
-            alpha[:, curr_t] = np.sum(
-                had_prod(alpha[:, curr_t - 1].T, self.transition_probs)
-            ).T
-            alpha[:, curr_t] = had_prod(
-                alpha[:, curr_t].T,
-                np.reshape(self.emission_probs[obs_map[curr_t], :], (1, 16)),
-            ).T
-            # Store scaling factors, scale alpha
-            c_scale[curr_t] = 1 / np.sum(alpha[:, curr_t])
-            alpha[:, curr_t] = had_prod(alpha[:, curr_t], c_scale[curr_t])
+    #     # store scaling factors, scale alpha
+    #     c_scale[0, 0] = 1 / np.sum(alpha[:, 0])
+    #     alpha[:, 0] = alpha[:, 0] * c_scale[0]
+    #     # Iteratively calculate alpha(t) for all 't'
+    #     for curr_t in range(1, num_observations):
+    #         alpha[:, curr_t] = np.sum(
+    #             had_prod(alpha[:, curr_t - 1].T, self.transition_probs)
+    #         ).T
+    #         alpha[:, curr_t] = had_prod(
+    #             alpha[:, curr_t].T,
+    #             np.reshape(self.emission_probs[obs_map[curr_t], :], (1, 16)),
+    #         ).T
+    #         # Store scaling factors, scale alpha
+    #         c_scale[curr_t] = 1 / np.sum(alpha[:, curr_t])
+    #         alpha[:, curr_t] = had_prod(alpha[:, curr_t], c_scale[curr_t])
 
-        # return the computed alpha
-        return (alpha, c_scale)
+    #     # return the computed alpha
+    #     return (alpha, c_scale)
 
-    def _compute_beta(self, observations, c_scale):
-        # Calculate Beta maxtrix
-        obs_map = self._generate_obs_map(observations)
-        num_states = self.num_states
-        num_observations = len(observations)
+    # def _compute_beta(self, observations, c_scale):
+    #     # Calculate Beta maxtrix
+    #     obs_map = self._generate_obs_map(observations)
+    #     num_states = self.num_states
+    #     num_observations = len(observations)
 
-        # Initialize values
-        ob_ind = obs_map[num_observations - 1]
-        beta = np.asmatrix(np.zeros((num_states, num_observations)))
+    #     # Initialize values
+    #     ob_ind = obs_map[num_observations - 1]
+    #     beta = np.asmatrix(np.zeros((num_states, num_observations)))
 
-        # Handle beta base case
-        beta[:, num_observations - 1] = 1  # c_scale[num_observations - 1]
+    #     # Handle beta base case
+    #     beta[:, num_observations - 1] = 1  # c_scale[num_observations - 1]
 
-        # Iteratively calculate beta(t) for all 't'
-        for curr_t in range(num_observations - 1, 0, -1):
-            ob_ind = obs_map[curr_t]
-            beta[:, curr_t - 1] = had_prod(
-                beta[:, curr_t].T, self.emission_probs[ob_ind, :]
-            ).T
-            beta[:, curr_t - 1] = np.sum(
-                had_prod(self.transition_probs, beta[:, curr_t - 1])
-            )
-            beta[:, curr_t - 1] = had_prod(beta[:, curr_t - 1], c_scale[curr_t - 1])
+    #     # Iteratively calculate beta(t) for all 't'
+    #     for curr_t in range(num_observations - 1, 0, -1):
+    #         ob_ind = obs_map[curr_t]
+    #         beta[:, curr_t - 1] = had_prod(
+    #             beta[:, curr_t].T, self.emission_probs[ob_ind, :]
+    #         ).T
+    #         beta[:, curr_t - 1] = np.sum(
+    #             had_prod(self.transition_probs, beta[:, curr_t - 1])
+    #         )
+    #         beta[:, curr_t - 1] = had_prod(beta[:, curr_t - 1], c_scale[curr_t - 1])
 
-        # return the computed beta
-        return beta
+    #     # return the computed beta
+    #     return beta
 
-    def _compute_gamma(self, observations):
-        # Find alpha and beta values
-        alpha, c_scale = self._compute_alpha(observations)
-        beta = self._compute_beta(observations, c_scale)
+    # def _compute_gamma(self, observations):
+    #     # Find alpha and beta values
+    #     alpha, c_scale = self._compute_alpha(observations)
+    #     beta = self._compute_beta(observations, c_scale)
 
-        alphabeta = had_prod(alpha, beta)
+    #     alphabeta = had_prod(alpha, beta)
 
-        # Calculate gamma
-        # gamma is simply product of alpha and beta
-        gamma = alphabeta / np.sum(alphabeta, axis=0)
-        return gamma
+    #     # Calculate gamma
+    #     # gamma is simply product of alpha and beta
+    #     gamma = alphabeta / np.sum(alphabeta, axis=0)
+    #     return gamma
 
     def _train_emission(self, observations):
         # Initialize matrix
@@ -434,15 +481,15 @@ class HMM(object):
 
         return new_emission_probs
 
-    def ind2onehot(self, ind):
-        onehot = np.zeros(self.emission_probs.shape[0])
-        onehot[ind] = 1
-        return onehot
+    # def ind2onehot(self, ind):
+    #     onehot = np.zeros(self.emission_probs.shape[0])
+    #     onehot[ind] = 1
+    #     return onehot
 
-    def obs2onehot(self, obs):
-        onehot = np.zeros(self.emission_probs.shape[0])
-        onehot[self.obs2ind(obs)] = 1
-        return onehot
+    # def obs2onehot(self, obs):
+    #     onehot = np.zeros(self.emission_probs.shape[0])
+    #     onehot[self.obs2ind(obs)] = 1
+    #     return onehot
 
     def _train_transition(self, observations):
         gamma = self._compute_gamma(observations)
@@ -566,3 +613,17 @@ class HMM(object):
         self.start_probs[self.sub2ind(0, 3)] = 0.0
         self.start_probs[self.sub2ind(3, 2)] = 0.0
         return None
+    
+    def _one_hot_encoder(self, seq, C):
+        """Converts sequence of index observations into a one-hot-encoding
+        
+        Returns
+        ------
+        OHE : numpy.ndarray
+            T x C array encoding seq
+            
+        """
+        b = np.zeros((len(seq), C))
+        b[np.arange(len(seq)), seq] = 1
+        return b
+
